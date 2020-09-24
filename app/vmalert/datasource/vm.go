@@ -8,8 +8,9 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
-	"strings"
 	"time"
+
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/auth"
 )
 
 type response struct {
@@ -49,7 +50,8 @@ func (r response) metrics() ([]Metric, error) {
 // VMStorage represents vmstorage entity with ability to read and write metrics
 type VMStorage struct {
 	c             *http.Client
-	queryURL      string
+	baseURL       string
+	suffix        string
 	basicAuthUser string
 	basicAuthPass string
 	lookBack      time.Duration
@@ -58,27 +60,33 @@ type VMStorage struct {
 const queryPath = "/api/v1/query?query="
 
 // NewVMStorage is a constructor for VMStorage
-func NewVMStorage(baseURL, basicAuthUser, basicAuthPass string, lookBack time.Duration, c *http.Client) *VMStorage {
+func NewVMStorage(baseURL, suffix, basicAuthUser, basicAuthPass string, lookBack time.Duration, c *http.Client) *VMStorage {
 	return &VMStorage{
 		c:             c,
+		baseURL:       baseURL,
+		suffix:        suffix,
 		basicAuthUser: basicAuthUser,
 		basicAuthPass: basicAuthPass,
-		queryURL:      strings.TrimSuffix(baseURL, "/") + queryPath,
 		lookBack:      lookBack,
 	}
 }
 
 // Query reads metrics from datasource by given query
-func (s *VMStorage) Query(ctx context.Context, query string) ([]Metric, error) {
+func (s *VMStorage) Query(ctx context.Context, at *auth.Token, query string) ([]Metric, error) {
 	const (
 		statusSuccess, statusError, rtVector = "success", "error", "vector"
 	)
-	q := s.queryURL + url.QueryEscape(query)
+	var queryURL string
+	if at.String() != "" {
+		queryURL = fmt.Sprintf("%v/%s/%s%s%s", s.baseURL, at.String(), s.suffix, queryPath, url.QueryEscape(query))
+	} else {
+		queryURL = fmt.Sprintf("%v/%s%s", s.baseURL, queryPath, url.QueryEscape(query))
+	}
 	if s.lookBack > 0 {
 		lookBack := time.Now().Add(-s.lookBack)
-		q += fmt.Sprintf("&time=%d", lookBack.Unix())
+		queryURL += fmt.Sprintf("&time=%d", lookBack.Unix())
 	}
-	req, err := http.NewRequest("POST", q, nil)
+	req, err := http.NewRequest("POST", queryURL, nil)
 	if err != nil {
 		return nil, err
 	}

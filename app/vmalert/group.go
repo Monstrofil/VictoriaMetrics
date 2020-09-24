@@ -12,6 +12,7 @@ import (
 	"github.com/VictoriaMetrics/VictoriaMetrics/app/vmalert/notifier"
 	"github.com/VictoriaMetrics/VictoriaMetrics/app/vmalert/remotewrite"
 	"github.com/VictoriaMetrics/VictoriaMetrics/app/vmalert/utils"
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/auth"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
 	"github.com/VictoriaMetrics/metrics"
 )
@@ -24,6 +25,7 @@ type Group struct {
 	Rules       []Rule
 	Interval    time.Duration
 	Concurrency int
+	AuthToken   *auth.Token
 	Checksum    string
 
 	doneCh     chan struct{}
@@ -59,6 +61,15 @@ func newGroup(cfg config.Group, defaultInterval time.Duration, labels map[string
 		finishedCh:  make(chan struct{}),
 		updateCh:    make(chan *Group),
 	}
+	if cfg.Tenant != nil {
+		g.AuthToken = &auth.Token{
+			AccountID: cfg.Tenant.AccountID,
+			ProjectID: cfg.Tenant.ProjectID,
+		}
+	} else {
+		g.AuthToken = datasource.DefaultAuthToken
+	}
+
 	g.metrics = newGroupMetrics(g.Name, g.File)
 	if g.Interval == 0 {
 		g.Interval = defaultInterval
@@ -99,6 +110,8 @@ func (g *Group) ID() uint64 {
 	hash.Write([]byte(g.File))
 	hash.Write([]byte("\xff"))
 	hash.Write([]byte(g.Name))
+	hash.Write([]byte("\xff"))
+	hash.Write([]byte(g.AuthToken.String()))
 	return hash.Sum64()
 }
 
@@ -112,7 +125,7 @@ func (g *Group) Restore(ctx context.Context, q datasource.Querier, lookback time
 		if rr.For < 1 {
 			continue
 		}
-		if err := rr.Restore(ctx, q, lookback, labels); err != nil {
+		if err := rr.Restore(ctx, g.AuthToken, q, lookback, labels); err != nil {
 			return fmt.Errorf("error while restoring rule %q: %w", rule, err)
 		}
 	}
@@ -158,6 +171,7 @@ func (g *Group) updateWith(newGroup *Group) error {
 		newRules = append(newRules, nr)
 	}
 	g.Concurrency = newGroup.Concurrency
+	g.AuthToken = newGroup.AuthToken
 	g.Checksum = newGroup.Checksum
 	g.Rules = newRules
 	return nil
@@ -314,7 +328,7 @@ func (e *executor) exec(ctx context.Context, rule Rule, returnSeries bool, inter
 
 	if len(tss) > 0 && e.rw != nil {
 		for _, ts := range tss {
-			if err := e.rw.Push(ts); err != nil {
+			if err := e.rw.Push(rule.AuthToken(), ts); err != nil {
 				remoteWriteErrors.Inc()
 				return fmt.Errorf("rule %q: remote write failure: %w", rule, err)
 			}

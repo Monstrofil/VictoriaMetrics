@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/app/vmalert/datasource"
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/auth"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/prompbmarshal"
 )
 
@@ -24,4 +25,6 @@ type Rule interface {
 	// Close performs the shutdown procedures for rule
 	// such as metrics unregister
 	Close()
+	// AuthToken returns the auth token of the rule
+	AuthToken() *auth.Token
 }

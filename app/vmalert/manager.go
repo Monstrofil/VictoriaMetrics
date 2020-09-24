@@ -146,6 +146,13 @@ func (g *Group) toAPI() APIGroup {
 		Interval:    g.Interval.String(),
 		Concurrency: g.Concurrency,
 	}
+	ag.AuthToken = nil
+	if g.AuthToken != nil {
+		ag.AuthToken = &APIAuthToken{
+			AccountID: g.AuthToken.AccountID,
+			ProjectID: g.AuthToken.ProjectID,
+		}
+	}
 	for _, r := range g.Rules {
 		switch v := r.(type) {
 		case *AlertingRule:

@@ -12,6 +12,7 @@ import (
 	"github.com/VictoriaMetrics/VictoriaMetrics/app/vmalert/config"
 	"github.com/VictoriaMetrics/VictoriaMetrics/app/vmalert/datasource"
 	"github.com/VictoriaMetrics/VictoriaMetrics/app/vmalert/notifier"
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/auth"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/prompbmarshal"
 	"github.com/VictoriaMetrics/metrics"
@@ -19,14 +20,15 @@ import (
 
 // AlertingRule is basic alert entity
 type AlertingRule struct {
-	RuleID      uint64
-	Name        string
-	Expr        string
-	For         time.Duration
-	Labels      map[string]string
-	Annotations map[string]string
-	GroupID     uint64
-	GroupName   string
+	RuleID         uint64
+	Name           string
+	Expr           string
+	For            time.Duration
+	Labels         map[string]string
+	Annotations    map[string]string
+	GroupID        uint64
+	GroupName      string
+	GroupAuthToken *auth.Token
 
 	// guard status fields
 	mu sync.RWMutex
@@ -50,16 +52,17 @@ type alertingRuleMetrics struct {
 
 func newAlertingRule(group *Group, cfg config.Rule) *AlertingRule {
 	ar := &AlertingRule{
-		RuleID:      cfg.ID,
-		Name:        cfg.Alert,
-		Expr:        cfg.Expr,
-		For:         cfg.For,
-		Labels:      cfg.Labels,
-		Annotations: cfg.Annotations,
-		GroupID:     group.ID(),
-		GroupName:   group.Name,
-		alerts:      make(map[uint64]*notifier.Alert),
-		metrics:     &alertingRuleMetrics{},
+		RuleID:         cfg.ID,
+		Name:           cfg.Alert,
+		Expr:           cfg.Expr,
+		For:            cfg.For,
+		Labels:         cfg.Labels,
+		Annotations:    cfg.Annotations,
+		GroupID:        group.ID(),
+		GroupName:      group.Name,
+		GroupAuthToken: group.AuthToken,
+		alerts:         make(map[uint64]*notifier.Alert),
+		metrics:        &alertingRuleMetrics{},
 	}
 
 	labels := fmt.Sprintf(`alertname=%q, group=%q, id="%d"`, ar.Name, group.Name, ar.ID())
@@ -117,10 +120,15 @@ func (ar *AlertingRule) ID() uint64 {
 	return ar.RuleID
 }
 
+// AuthToken returns the auth token of the alerting rule
+func (ar *AlertingRule) AuthToken() *auth.Token {
+	return ar.GroupAuthToken
+}
+
 // Exec executes AlertingRule expression via the given Querier.
 // Based on the Querier results AlertingRule maintains notifier.Alerts
 func (ar *AlertingRule) Exec(ctx context.Context, q datasource.Querier, series bool) ([]prompbmarshal.TimeSeries, error) {
-	qMetrics, err := q.Query(ctx, ar.Expr)
+	qMetrics, err := q.Query(ctx, ar.GroupAuthToken, ar.Expr)
 	ar.mu.Lock()
 	defer ar.mu.Unlock()
 
@@ -247,6 +255,7 @@ func (ar *AlertingRule) newAlert(m datasource.Metric, start time.Time) (*notifie
 	// label defined here to make override possible by
 	// time series labels.
 	a.Labels[alertGroupNameLabel] = ar.GroupName
+	a.Labels[alertGroupAuthTokenLabel] = ar.GroupAuthToken.String()
 	for _, l := range m.Labels {
 		// drop __name__ to be consistent with Prometheus alerting
 		if l.Name == "__name__" {
@@ -353,6 +362,8 @@ const (
 
 	// alertGroupNameLabel defines the label name attached for generated time series.
 	alertGroupNameLabel = "alertgroup"
+	// alertGroupAuthTokenLabel defines the group auth token attached for generated time series.
+	alertGroupAuthTokenLabel = "alertgroupat"
 )
 
 // alertToTimeSeries converts the given alert with the given timestamp to timeseries
@@ -392,7 +403,7 @@ func alertForToTimeSeries(name string, a *notifier.Alert, timestamp time.Time) p
 // Restore restores only Start field. Field State will be always Pending and supposed
 // to be updated on next Exec, as well as Value field.
 // Only rules with For > 0 will be restored.
-func (ar *AlertingRule) Restore(ctx context.Context, q datasource.Querier, lookback time.Duration, labels map[string]string) error {
+func (ar *AlertingRule) Restore(ctx context.Context, at *auth.Token, q datasource.Querier, lookback time.Duration, labels map[string]string) error {
 	if q == nil {
 		return fmt.Errorf("querier is nil")
 	}
@@ -408,7 +419,7 @@ func (ar *AlertingRule) Restore(ctx context.Context, q datasource.Querier, lookb
 	// remote write protocol which is used for state persistence in vmalert.
 	expr := fmt.Sprintf("last_over_time(%s{alertname=%q%s}[%ds])",
 		alertForStateMetricName, ar.Name, labelsFilter, int(lookback.Seconds()))
-	qMetrics, err := q.Query(ctx, expr)
+	qMetrics, err := q.Query(ctx, at, expr)
 	if err != nil {
 		return err
 	}

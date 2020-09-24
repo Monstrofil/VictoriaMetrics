@@ -36,19 +36,21 @@ func Init(ctx context.Context) (*Client, error) {
 		return nil, nil
 	}
 
-	t, err := utils.Transport(*addr, *tlsCertFile, *tlsKeyFile, *tlsCAFile, *tlsServerName, *tlsInsecureSkipVerify)
+	tr, err := utils.Transport(*addr, *tlsCertFile, *tlsKeyFile, *tlsCAFile, *tlsServerName, *tlsInsecureSkipVerify)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create transport: %w", err)
 	}
 
 	return NewClient(ctx, Config{
-		Addr:          *addr,
+		URL:           *addr,
+		BaseURL:       "",
+		Suffix:        "",
 		Concurrency:   *concurrency,
 		MaxQueueSize:  *maxQueueSize,
 		MaxBatchSize:  *maxBatchSize,
 		FlushInterval: *flushInterval,
 		BasicAuthUser: *basicAuthUsername,
 		BasicAuthPass: *basicAuthPassword,
-		Transport:     t,
+		Transport:     tr,
 	})
 }
